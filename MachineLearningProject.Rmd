@@ -1,0 +1,133 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Robert Mooney"
+date: "Tuesday, May 19, 2015"
+output: html_document
+---
+
+Introduction
+=============
+The goal of this assignment is to develop an algorithm to predict if participants in a wearables study performed exercises correctly or incorrectly.  There were five different ways a participant may have performed an exercise.
+
+The training and test sets are found here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+Descriptions of the sets and study can be found here:
+http://groupware.les.inf.puc-rio.br/har
+
+Predictors may be any data in the dataset.  The prediction variable is 'classe' variable, which is coded as any letter between A through E to represent the five different methods a participant could train.
+
+Discovery
+===========
+Load the datasets.  For now, leave stringsAsFactors to default as TRUE.
+
+Eliminate columns that have NAs.  There are lots of them:
+```{r}
+library(corrplot)
+library(caret)
+
+setwd("~/GitHub/MachineLearningProject")
+train = read.csv('pml-training.csv')
+test = read.csv('pml-testing.csv')
+
+sumcols = colSums(is.na(train)) 
+
+new.train = train[, (colSums(is.na(train)) == 0)]
+new.test = test[, (colSums(is.na(train)) == 0)]
+```
+
+Pre-Processing
+=================
+Eliminate non-predictor variables such as user name, timestamp (unless we really think the time of day might impact things), and other non-relevant variables. Ensure that we impact train and test in the same manner.
+```{r}
+include.cols <- c("roll_belt", "pitch_belt", "yaw_belt", "total_accel_belt", 
+    "gyros_belt_x", "gyros_belt_y", "gyros_belt_z", "accel_belt_x", "accel_belt_y", 
+    "accel_belt_z", "magnet_belt_x", "magnet_belt_y", "magnet_belt_z", "roll_arm", 
+    "pitch_arm", "yaw_arm", "total_accel_arm", "gyros_arm_x", "gyros_arm_y", 
+    "gyros_arm_z", "accel_arm_x", "accel_arm_y", "accel_arm_z", "magnet_arm_x", 
+    "magnet_arm_y", "magnet_arm_z", "roll_dumbbell", "pitch_dumbbell", "yaw_dumbbell", 
+    "total_accel_dumbbell", "gyros_dumbbell_x", "gyros_dumbbell_y", "gyros_dumbbell_z", 
+    "accel_dumbbell_x", "accel_dumbbell_y", "accel_dumbbell_z", "magnet_dumbbell_x", 
+    "magnet_dumbbell_y", "magnet_dumbbell_z", "roll_forearm", "pitch_forearm", 
+    "yaw_forearm", "total_accel_forearm", "gyros_forearm_x", "gyros_forearm_y", 
+    "gyros_forearm_z", "accel_forearm_x", "accel_forearm_y", "accel_forearm_z", 
+    "magnet_forearm_x", "magnet_forearm_y", "magnet_forearm_z")
+new.test = new.test[,include.cols]
+new.train = new.train[,c(include.cols,'classe')]
+```
+This results in a simplified data set.  
+
+The training set is so large compared to the test set that it makes sense to create a validation set from it.
+```{r}
+inTrain = createDataPartition(y = new.train$classe, p = 0.7, list = FALSE)
+trainSet = new.train[inTrain, ]
+validationSet = new.train[-inTrain, ]
+```
+
+Look at highly correlated variables -- these may be another opportunity for removal.
+```{r}
+corMatrix = cor(trainSet[, names(trainSet) != "classe"])
+corrplot(corMatrix, order = "FPC", method = "color", type = "lower", tl.cex = 0.8, 
+    tl.col = rgb(0, 0, 0))
+```
+
+Dark blue and dark red indicate high positive and negative correlations.  PCA can be used to extract more uncorrelated predictors.
+
+```{r}
+preProc = preProcess(trainSet[,names(trainSet) != "classe"], method = "pca", thresh = 0.99)
+trainPC = predict(preProc, trainSet[, names(trainSet) != "classe"])
+validPC = predict(preProc, validationSet[, names(trainSet) != "classe"])
+```
+
+Apply a random forest model on the training set.  Cross validation is used in the trainControl() parameter.
+```{r cache=TRUE}
+library(randomForest)
+modelFit <- train(trainSet$classe ~ ., method = "rf", data = trainPC,
+                  trControl = trainControl(method ="cv", number = 4), importance = TRUE)
+# folds =4, which roughly means 25% of the data will be used to evaluate in the cross validation
+```
+
+Plot importance of individual components in the trained model:
+```{r}
+varImpPlot(modelFit$finalModel, sort = TRUE, type = 1, pch = 19, col = 1, cex = 1)
+```
+
+Points that score high in the importance of the model are listed first with values high on the x-axis.
+It looks like we could still prune our model further if we feared too much overfitting by cutting out the bottom 2-3 variables.
+
+Validation and Out of Sample Error
+===================================
+We saved some data for validation.  We should use it:
+```{r}
+pred.valid <- predict(modelFit, validPC)
+confusionMatrix(validationSet$classe, pred.valid)
+```
+
+The accuracy based on the validation set is .9789, or 97.9%.  We can confirm this with a calculation and then estimate the out of sample error.  
+```{r}
+accuracy = sum(pred.valid == validationSet$classe)/length(pred.valid)
+1-accuracy
+```
+
+The out of sample error is estimated to be 2.1%.
+
+Predictions
+============
+Predict the answers, list,and prep for uploading to Coursera.
+```{r}
+testPC = predict(preProc, new.test)
+pred.test = predict(modelFit,testPC)
+pred.test
+
+ 
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(pred.test)
+```
